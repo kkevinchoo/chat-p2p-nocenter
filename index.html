@@ -230,15 +230,19 @@
                         messageElement.appendChild(fileLink);
                     }
                     incomingFile = { name: null, chunks: [], size: 0, receivedSize: 0 };
-                } else if (data instanceof ArrayBuffer) {
-                    incomingFile.chunks.push(data);
-                    incomingFile.receivedSize += data.byteLength;
+                } else if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
+                    const chunk = data instanceof Uint8Array ? data.buffer : data;
+                    
+                    incomingFile.chunks.push(chunk);
+                    incomingFile.receivedSize += chunk.byteLength;
+                    
                     const progress = Math.round((incomingFile.receivedSize / incomingFile.size) * 100);
                     const messageElement = document.querySelector(`.message.file-message[data-filename="${incomingFile.name}"]`);
+                    
                     if (messageElement) {
                         messageElement.textContent = `Recibiendo archivo: ${incomingFile.name}... ${progress}%`;
                     }
-                } else if (data.type === 'text') {
+                }  else if (data.type === 'text') {
                     displayMessage(data.content, 'received');
                 }
             }
