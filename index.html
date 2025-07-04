@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat P2P con PeerJS</title>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    
+    <style>
+        body {
+            padding: 2em;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        main {
+            width: 100%;
+            max-width: 700px;
+        }
+        .hidden {
+            display: none !important;
+        }
+        #chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 75vh;
+            border: 1px solid var(--pico-contrast);
+            border-radius: var(--pico-border-radius);
+            overflow: hidden;
+        }
+        #messages {
+            flex-grow: 1;
+            padding: 1.5em;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1em;
+        }
+        .message {
+            padding: 0.75em 1.25em;
+            border-radius: 1.5em;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+        .message.sent {
+            background-color: var(--pico-primary);
+            color: var(--pico-primary-inverse);
+            align-self: flex-end;
+            border-bottom-right-radius: 0.25em;
+        }
+        .message.received {
+            background-color: var(--pico-contrast-hover);
+            align-self: flex-start;
+            border-bottom-left-radius: 0.25em;
+        }
+        .message.system {
+            background-color: transparent;
+            color: var(--pico-secondary);
+            font-style: italic;
+            font-size: 0.9em;
+            text-align: center;
+            align-self: center;
+        }
+        #chat-form {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 1em;
+            padding: 1em;
+            border-top: 1px solid var(--pico-contrast);
+        }
+        #my-id-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+            margin-bottom: 1em;
+        }
+        #my-peer-id {
+            font-family: monospace;
+            background: var(--pico-contrast-hover);
+            padding: 0.25em 0.5em;
+            border-radius: var(--pico-border-radius);
+            font-weight: bold;
+        }
+        #copy-id-btn {
+            width: auto;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <section id="setup-view">
+            <article>
+                <header>
+                    <h2>Chat P2P Descentralizado</h2>
+                </header>
+                
+                <div id="my-id-container">
+                    <strong>Tu ID de sesión:</strong> 
+                    <span id="my-peer-id" aria-busy="true">Generando...</span>
+                    <button id="copy-id-btn" class="outline secondary" disabled>Copiar</button>
+                </div>
+                
+                <p>Para iniciar un chat, comparte tu ID con otra persona o introduce el suyo a continuación.</p>
+
+                <form id="connect-form">
+                    <div class="grid">
+                        <input type="text" id="friend-id-input" placeholder="ID del otro usuario" required>
+                        <button type="submit" id="connect-btn" disabled>Conectar</button>
+                    </div>
+                </form>
+                 <small id="connection-status"></small>
+            </article>
+        </section>
+
+        <section id="chat-view" class="hidden">
+             <header>
+                <nav>
+                    <ul><li><strong>Chat con <span id="connected-to-id">...</span></strong></li></ul>
+                    <ul><li><button id="disconnect-btn" class="contrast">Desconectar</button></li></ul>
+                </nav>
+            </header>
+            <div id="chat-container">
+                <div id="messages"></div>
+                <form id="chat-form">
+                    <input type="text" id="message-input" placeholder="Escribe un mensaje..." required>
+                    <button type="submit" id="send-btn">Enviar</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const setupView = document.getElementById('setup-view');
+            const chatView = document.getElementById('chat-view');
+            
+            const myPeerIdSpan = document.getElementById('my-peer-id');
+            const copyIdBtn = document.getElementById('copy-id-btn');
+            const friendIdInput = document.getElementById('friend-id-input');
+            const connectForm = document.getElementById('connect-form');
+            const connectBtn = document.getElementById('connect-btn');
+            const connectionStatus = document.getElementById('connection-status');
+            
+            const connectedToIdSpan = document.getElementById('connected-to-id');
+            const messagesDiv = document.getElementById('messages');
+            const chatForm = document.getElementById('chat-form');
+            const messageInput = document.getElementById('message-input');
+            const sendBtn = document.getElementById('send-btn');
+            const disconnectBtn = document.getElementById('disconnect-btn');
+
+            let peer = null;
+            let currentConnection = null;
+
+            function initializePeer() {
+                peer = new Peer();
+
+                peer.on('open', (id) => {
+                    myPeerIdSpan.textContent = id;
+                    myPeerIdSpan.setAttribute('aria-busy', 'false');
+                    connectBtn.removeAttribute('disabled');
+                    copyIdBtn.removeAttribute('disabled');
+                });
+
+                peer.on('connection', (conn) => {
+                    if (currentConnection && currentConnection.open) {
+                        conn.close();
+                        return;
+                    }
+                    currentConnection = conn;
+                    setupConnectionHandlers(conn);
+                });
+
+                peer.on('error', (err) => {
+                    console.error('Error de PeerJS:', err);
+                    connectionStatus.textContent = `Error: ${err.message}`;
+                    alert(`Ha ocurrido un error: ${err.type}. Intenta recargar la página.`);
+                });
+                
+                peer.on('disconnected', () => {
+                    connectionStatus.textContent = 'Desconectado del servidor PeerJS. Intentando reconectar...';
+                    peer.reconnect();
+                });
+                
+                 peer.on('close', () => {
+                    currentConnection = null;
+                    showSetupView('Tu sesión ha sido cerrada. Recarga para obtener una nueva.');
+                });
+            }
+
+            function setupConnectionHandlers(conn) {
+                conn.on('open', () => {
+                    showChatView(conn.peer);
+                    displaySystemMessage(`Conectado con ${conn.peer}. ¡Puedes empezar a chatear!`);
+                });
+
+                conn.on('data', (data) => {
+                    displayMessage(data, 'received');
+                });
+
+                conn.on('close', () => {
+                    currentConnection = null;
+                    showSetupView(`Conexión con ${conn.peer} cerrada.`);
+                });
+
+                conn.on('error', (err) => {
+                    console.error('Error de conexión:', err);
+                    displaySystemMessage(`Error en la conexión: ${err.message}`);
+                });
+            }
+
+            function connectToPeer(peerId) {
+                if (currentConnection) {
+                    currentConnection.close();
+                }
+                connectionStatus.textContent = `Conectando con ${peerId}...`;
+                connectBtn.setAttribute('aria-busy', 'true');
+
+                const conn = peer.connect(peerId, { reliable: true });
+                currentConnection = conn;
+                setupConnectionHandlers(conn);
+            }
+            
+            function displayMessage(content, type) {
+                const messageElement = document.createElement('div');
+                messageElement.className = `message ${type}`;
+                messageElement.textContent = content;
+                messagesDiv.appendChild(messageElement);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+
+            function displaySystemMessage(content) {
+                displayMessage(content, 'system');
+            }
+            
+            function showChatView(peerId) {
+                connectedToIdSpan.textContent = peerId;
+                setupView.classList.add('hidden');
+                chatView.classList.remove('hidden');
+                messageInput.focus();
+                connectionStatus.textContent = '';
+                connectBtn.setAttribute('aria-busy', 'false');
+            }
+
+            function showSetupView(statusMessage = '') {
+                chatView.classList.add('hidden');
+                setupView.classList.remove('hidden');
+                messagesDiv.innerHTML = '';
+                friendIdInput.value = '';
+                connectionStatus.textContent = statusMessage;
+                connectBtn.setAttribute('aria-busy', 'false');
+            }
+
+            copyIdBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText(myPeerIdSpan.textContent).then(() => {
+                    const originalText = copyIdBtn.textContent;
+                    copyIdBtn.textContent = '¡Copiado!';
+                    setTimeout(() => {
+                        copyIdBtn.textContent = originalText;
+                    }, 1500);
+                });
+            });
+
+            connectForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const friendId = friendIdInput.value.trim();
+                if (friendId && peer.id !== friendId) {
+                    connectToPeer(friendId);
+                } else if(peer.id === friendId) {
+                    connectionStatus.textContent = 'No puedes conectarte a ti mismo.';
+                }
+            });
+
+            chatForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const message = messageInput.value.trim();
+                if (message && currentConnection && currentConnection.open) {
+                    currentConnection.send(message);
+                    displayMessage(message, 'sent');
+                    messageInput.value = '';
+                    messageInput.focus();
+                }
+            });
+            
+            disconnectBtn.addEventListener('click', () => {
+                if (currentConnection) {
+                    currentConnection.close();
+                }
+            });
+
+            initializePeer();
+        });
+    </script>
+</body>
+</html>
