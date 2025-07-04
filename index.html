@@ -217,20 +217,34 @@
                     };
                     displayFileMessage(`Recibiendo archivo: ${data.name}... 0%`, 'received', data.name);
                 } else if (data.type === 'file-end') {
+                    // Crear el archivo a partir de los chunks
                     const fileBlob = new Blob(incomingFile.chunks, { type: incomingFile.type });
+                    
+                    // Verificar integridad del archivo
+                    if (fileBlob.size !== incomingFile.size) {
+                        displaySystemMessage(`Error: Archivo ${incomingFile.name} incompleto`);
+                        return;
+                    }
+                    
                     const downloadUrl = URL.createObjectURL(fileBlob);
                     const fileLink = document.createElement('a');
                     fileLink.href = downloadUrl;
                     fileLink.download = incomingFile.name;
                     fileLink.textContent = `Descargar ${incomingFile.name}`;
+                    fileLink.onclick = () => setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
                     
                     const messageElement = document.querySelector(`.message.file-message[data-filename="${incomingFile.name}"]`);
                     if (messageElement) {
                         messageElement.innerHTML = '';
                         messageElement.appendChild(fileLink);
                     }
+                    
+                    // Reiniciar estado
                     incomingFile = { name: null, chunks: [], size: 0, receivedSize: 0 };
                 } else if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
+                    if (!incomingFile.name) return;
+                    
+                    // Convertir a ArrayBuffer si es necesario
                     const chunk = data instanceof Uint8Array ? data.buffer : data;
                     
                     incomingFile.chunks.push(chunk);
@@ -242,7 +256,7 @@
                     if (messageElement) {
                         messageElement.textContent = `Recibiendo archivo: ${incomingFile.name}... ${progress}%`;
                     }
-                }  else if (data.type === 'text') {
+                } else if (data.type === 'text') {
                     displayMessage(data.content, 'received');
                 }
             }
@@ -287,38 +301,37 @@
                 }
             }
 
-            function sendFile(file) {
+            async function sendFile(file) {
                 if (!file || !currentConnection || !currentConnection.open) return;
                 
                 displayFileMessage(`Enviando archivo: ${file.name}`, 'sent', file.name);
-
+            
+                // Enviar metadatos primero
                 currentConnection.send({
                     type: 'file-meta',
                     name: file.name,
                     size: file.size,
                     fileType: file.type
                 });
-
-                const fileReader = new FileReader();
-                fileReader.onload = (e) => {
-                    const buffer = e.target.result;
-                    let offset = 0;
+            
+                // Leer el archivo como ArrayBuffer
+                const buffer = await file.arrayBuffer();
+                const totalChunks = Math.ceil(buffer.byteLength / CHUNK_SIZE);
+                
+                // Enviar chunks en secuencia con pequeño retraso
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, buffer.byteLength);
+                    const chunk = buffer.slice(start, end);
                     
-                    function sendNextChunk() {
-                        if (offset >= buffer.byteLength) {
-                            currentConnection.send({ type: 'file-end' });
-                            return;
-                        }
-                        const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
-                        currentConnection.send(chunk);
-                        offset += chunk.byteLength;
-                        
-                        // Pequeña espera para no saturar el canal de datos
-                        setTimeout(sendNextChunk, 10);
-                    }
-                    sendNextChunk();
-                };
-                fileReader.readAsArrayBuffer(file);
+                    currentConnection.send(chunk);
+                    
+                    // Pequeña pausa para evitar saturación
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            
+                // Enviar marca de finalización
+                currentConnection.send({ type: 'file-end' });
             }
             
             function showChatView(peerId) {
